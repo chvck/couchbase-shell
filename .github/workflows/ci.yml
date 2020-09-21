@@ -71,6 +71,9 @@ jobs:
     - name: Install dependencies (macos)
       if: matrix.os == 'macos-latest'
       run: brew install automake
+    - name: Install dependencies (macos)
+      if: matrix.os == 'macos-latest'
+      run: brew install openssl
 
     - name: Install dependencies - LLVM via choco (windows)
       shell: powershell
