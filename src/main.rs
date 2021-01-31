@@ -210,6 +210,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Manages local cluster references
         nu_cli::whole_stream_command(Clusters::new(state.clone())),
         nu_cli::whole_stream_command(ClustersHealth::new(state.clone())),
+        nu_cli::whole_stream_command(ClustersRebalance::new(state.clone())),
         // Create fake data based on templates
         nu_cli::whole_stream_command(FakeData::new(state.clone())),
         // Displays indexes

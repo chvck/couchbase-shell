@@ -28,7 +28,7 @@ impl nu_cli::WholeStreamCommand for ClustersHealth {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build("buckets config").named(
+        Signature::build("clusters health").named(
             "clusters",
             SyntaxShape::String,
             "the clusters which should be contacted",
