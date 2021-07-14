@@ -148,5 +148,6 @@ pub(crate) fn bucket_to_tagged_dict(
     collected.insert_value("flush_enabled", bucket.flush_enabled());
     collected.insert_value("status", bucket.status().unwrap_or(&"".to_string()).clone());
     collected.insert_value("cloud", is_cloud);
+    collected.insert_value("error", "");
     collected.into_value()
 }

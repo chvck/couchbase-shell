@@ -6,11 +6,13 @@ use crate::state::State;
 use log::debug;
 use nu_engine::CommandArgs;
 use nu_errors::ShellError;
-use nu_protocol::{Signature, SyntaxShape};
+use nu_protocol::{Signature, SyntaxShape, TaggedDictBuilder, UntaggedValue};
+use nu_source::Tag;
 use nu_stream::OutputStream;
 use std::convert::TryFrom;
 use std::ops::Add;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::time::Instant;
 
 pub struct Buckets {
@@ -59,52 +61,94 @@ fn buckets_get_all(
     let guard = state.lock().unwrap();
     let mut results = vec![];
     for identifier in cluster_identifiers {
-        let cluster = match guard.clusters().get(&identifier) {
-            Some(c) => c,
-            None => {
-                return Err(ShellError::untagged_runtime_error("Cluster not found"));
+        let bucket_result = buckets_get(ctrl_c.clone(), &guard, &identifier);
+        match bucket_result {
+            Ok(buckets) => {
+                for bucket in buckets {
+                    results.push(bucket_to_tagged_dict(bucket, identifier.clone(), false))
+                }
             }
-        };
-
-        if let Some(plane) = cluster.cloud_org() {
-            let cloud = guard.cloud_org_for_cluster(plane)?.client();
-            let deadline = Instant::now().add(cluster.timeouts().management_timeout());
-            let cluster_id = cloud.find_cluster_id(identifier.clone(), deadline, ctrl_c.clone())?;
-            let response = cloud.cloud_request(
-                CloudRequest::GetBuckets { cluster_id },
-                deadline,
-                ctrl_c.clone(),
-            )?;
-            if response.status() != 200 {
-                return Err(ShellError::unexpected(response.content()));
-            }
-
-            let content: Vec<JSONCloudBucketSettings> = serde_json::from_str(response.content())?;
-            for bucket in content.into_iter() {
-                results.push(bucket_to_tagged_dict(
-                    BucketSettings::try_from(bucket)?,
-                    identifier.clone(),
-                    true,
-                ));
-            }
-        } else {
-            let response = cluster.cluster().http_client().management_request(
-                ManagementRequest::GetBuckets,
-                Instant::now().add(cluster.timeouts().management_timeout()),
-                ctrl_c.clone(),
-            )?;
-
-            let content: Vec<JSONBucketSettings> = serde_json::from_str(response.content())?;
-
-            for bucket in content.into_iter() {
-                results.push(bucket_to_tagged_dict(
-                    BucketSettings::try_from(bucket)?,
-                    identifier.clone(),
-                    false,
-                ));
+            Err(e) => {
+                let mut collected = TaggedDictBuilder::new(Tag::default());
+                collected.insert_value("cluster", identifier);
+                collected.insert_value("name", "");
+                collected.insert_value("type", "");
+                collected.insert_value("replicas", "");
+                collected.insert_value("min_durability_level", "");
+                collected.insert_value("ram_quota", "");
+                collected.insert_value("flush_enabled", "");
+                collected.insert_value("status", "");
+                collected.insert_value("cloud", false);
+                collected.insert_value("error", e.to_string());
+                results.push(collected.into_value());
             }
         }
     }
 
     Ok(OutputStream::from(results))
+}
+
+fn buckets_get(
+    ctrl_c: Arc<AtomicBool>,
+    guard: &MutexGuard<State>,
+    identifier: &String,
+) -> Result<Vec<BucketSettings>, ShellError> {
+    let cluster = match guard.clusters().get(identifier) {
+        Some(c) => c,
+        None => {
+            return Err(ShellError::untagged_runtime_error("Cluster not known"));
+        }
+    };
+
+    let results = if let Some(plane) = cluster.cloud_org() {
+        let cloud = guard.cloud_org_for_cluster(plane)?.client();
+        let deadline = Instant::now().add(cluster.timeouts().management_timeout());
+        let cluster_id = cloud.find_cluster_id(identifier.clone(), deadline, ctrl_c.clone())?;
+        let response = cloud.cloud_request(
+            CloudRequest::GetBuckets { cluster_id },
+            deadline,
+            ctrl_c.clone(),
+        )?;
+        if response.status() != 200 {
+            return Err(ShellError::unexpected(response.content()));
+        }
+
+        let content: Vec<JSONCloudBucketSettings> = serde_json::from_str(response.content())?;
+
+        let mut buckets = vec![];
+        for bucket in content.into_iter() {
+            buckets.push(BucketSettings::try_from(bucket)?);
+        }
+
+        buckets
+        //     results.push(bucket_to_tagged_dict(
+        //         BucketSettings::try_from(bucket)?,
+        //         identifier.clone(),
+        //         true,
+        //     ));
+        // }
+    } else {
+        let response = cluster.cluster().http_client().management_request(
+            ManagementRequest::GetBuckets,
+            Instant::now().add(cluster.timeouts().management_timeout()),
+            ctrl_c.clone(),
+        )?;
+
+        let content: Vec<JSONBucketSettings> = serde_json::from_str(response.content())?;
+
+        let mut buckets = vec![];
+        for bucket in content.into_iter() {
+            buckets.push(BucketSettings::try_from(bucket)?);
+        }
+
+        buckets
+        // for bucket in content.into_iter() {
+        //     results.push(bucket_to_tagged_dict(
+        //         BucketSettings::try_from(bucket)?,
+        //         identifier.clone(),
+        //         false,
+        //     ));
+        // }
+    };
+    Ok(results)
 }
